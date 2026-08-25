@@ -1,0 +1,22 @@
+{
+  "name": "skillkit",
+  "version": "0.1.0",
+  "description": "Catalog of agent skills with an interactive installer.",
+  "type": "module",
+  "bin": {
+    "skillkit": "bin/install.mjs",
+    "skillkit-install": "bin/install.mjs",
+    "skillkit-uninstall": "bin/uninstall.mjs"
+  },
+  "scripts": {
+    "start": "node bin/install.mjs",
+    "uninstall": "node bin/uninstall.mjs",
+    "docs": "node scripts/gen-readme.mjs",
+    "test": "node --test"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "gray-matter": "^4.0.3"
+  }
+}
