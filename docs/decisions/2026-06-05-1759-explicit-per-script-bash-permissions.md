@@ -6,6 +6,9 @@ status: active
 git_sha: 59e31c3
 tags: []
 ---
+> **Provenance.** Recorded in the `claude-skills` repo before the 2026-08-25 split;
+> the `git_sha` above refers to that repo's history, not to `skillkit`'s.
+
 
 # Use explicit per-script Bash permissions instead of path wildcard in debug-decisions setup
 

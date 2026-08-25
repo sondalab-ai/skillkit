@@ -6,6 +6,9 @@ status: active
 git_sha: 954453f
 tags: [spec-versioning]
 ---
+> **Provenance.** Recorded in the `claude-skills` repo before the 2026-08-25 split;
+> the `git_sha` above refers to that repo's history, not to `skillkit`'s.
+
 
 # Use explicit --superpowers flag in /spec-new and /plan-new instead of filesystem auto-detection
 

@@ -6,6 +6,9 @@ status: active
 git_sha: aadd9e1
 tags: [docs, skills]
 ---
+> **Provenance.** Recorded in the `claude-skills` repo before the 2026-08-25 split;
+> the `git_sha` above refers to that repo's history, not to `skillkit`'s.
+
 
 # Separate README.md from SKILL.md in each skill
 
