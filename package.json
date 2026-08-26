@@ -1,7 +1,15 @@
 {
-  "name": "skillkit",
+  "name": "@sondalab/skillkit",
   "version": "0.1.0",
   "description": "Catalog of agent skills with an interactive installer.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sondalab-ai/skillkit.git"
+  },
+  "author": "Marcello Barile <marcello.barile@gmail.com>",
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "bin": {
     "skillkit": "bin/install.mjs",
