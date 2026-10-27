@@ -1,14 +1,30 @@
 import { join } from "node:path";
-import { rmSync, existsSync, readdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { rmSync, existsSync, readdirSync, readFileSync } from "node:fs";
 
-export default async function teardown({ skillDir, claudeDir, log }) {
+/**
+ * Remove each command file this skill ships only while ~/.claude still holds
+ * its byte-identical copy; a differing file is kept and reported. Inlined in
+ * every teardown, which stays self-contained (no repo lib/ import).
+ */
+function removeOwnedCommands({ skillDir, claudeDir, log }, skill) {
   const src = join(skillDir, "commands");
-  const dest = join(claudeDir, "commands");
-  if (existsSync(src)) {
-    for (const f of readdirSync(src).filter((n) => n.endsWith(".md"))) {
-      const target = join(dest, f);
-      if (existsSync(target)) rmSync(target);
+  const removed = [];
+  if (!existsSync(src)) return removed;
+  for (const f of readdirSync(src).filter((n) => n.endsWith(".md"))) {
+    const target = join(claudeDir, "commands", f);
+    if (!existsSync(target)) continue;
+    if (readFileSync(target).equals(readFileSync(join(src, f)))) {
+      rmSync(target);
+      removed.push(f);
+    } else {
+      log.warn(`kept ${target.replace(homedir(), "~")}: changed since install, or not installed by ${skill}`);
     }
   }
-  log.info("memory-org: command removed");
+  return removed;
+}
+
+export default async function teardown(ctx) {
+  const removed = removeOwnedCommands(ctx, "memory-org");
+  if (removed.length) ctx.log.info(`memory-org: removed ${removed.join(", ")}`);
 }

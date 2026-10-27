@@ -1,56 +1,126 @@
 // test/teardown.integration.test.mjs
-// Runs the actual debug-decisions teardown.mjs against throwaway dirs to prove
-// the self-contained (inlined) command + hook removal works end-to-end.
+// Runs the real teardown.mjs of every skill that has one against throwaway
+// dirs: each removes only what its setup wrote, byte for byte or entry for entry.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import teardown from "../skills/debug-decisions/teardown.mjs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
-const noopLog = { info() {}, success() {}, warn() {}, error() {} };
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const SKILLS = join(ROOT, "skills");
+const WITH_TEARDOWN = readdirSync(SKILLS).filter((s) => existsSync(join(SKILLS, s, "teardown.mjs")));
 
-test("debug-decisions teardown removes its commands and Stop hook, keeps the rest", async () => {
+/** A log that records warn lines. */
+function recorder() {
+  const warns = [];
+  return { warns, log: { info() {}, success() {}, step() {}, message() {}, warn: (m) => warns.push(m), warning: (m) => warns.push(m), error() {} } };
+}
+
+/** A temp skillDir (copy of the catalog skill) and claudeDir with the skill's commands installed. */
+function installed(skill) {
   const root = mkdtempSync(join(tmpdir(), "teardown-"));
-  const skillDir = join(root, "skill");
+  const skillDir = join(root, "skills", skill);
   const claudeDir = join(root, "claude");
-  mkdirSync(join(skillDir, "commands"), { recursive: true });
-  mkdirSync(join(skillDir, "hooks"), { recursive: true });
+  cpSync(join(SKILLS, skill), skillDir, { recursive: true });
   mkdirSync(join(claudeDir, "commands"), { recursive: true });
+  const shipped = readdirSync(join(skillDir, "commands")).filter((f) => f.endsWith(".md"));
+  for (const f of shipped) cpSync(join(skillDir, "commands", f), join(claudeDir, "commands", f));
+  return { skillDir, claudeDir, shipped };
+}
 
-  // Skill ships two commands + the hook script.
-  writeFileSync(join(skillDir, "commands", "decision.md"), "x");
-  writeFileSync(join(skillDir, "commands", "decision-list.md"), "x");
-  writeFileSync(join(skillDir, "hooks", "decisions-stop-prompt.js"), "");
+for (const skill of WITH_TEARDOWN) {
+  test(`${skill} teardown removes unmodified commands, keeps changed and foreign ones with a warn`, async () => {
+    const { default: teardown } = await import(join(SKILLS, skill, "teardown.mjs"));
+    const { skillDir, claudeDir, shipped } = installed(skill);
+    const [changed, ...same] = shipped;
+    writeFileSync(join(claudeDir, "commands", changed), "edited by the user");
+    writeFileSync(join(claudeDir, "commands", "other.md"), "keep");
+    const { warns, log } = recorder();
+    await teardown({ skillDir, claudeDir, log });
+    for (const f of same) assert.ok(!existsSync(join(claudeDir, "commands", f)), f);
+    assert.equal(readFileSync(join(claudeDir, "commands", changed), "utf8"), "edited by the user");
+    assert.equal(readFileSync(join(claudeDir, "commands", "other.md"), "utf8"), "keep");
+    assert.equal(warns.length, 1);
+    assert.match(warns[0], new RegExp(`^kept .*commands/${changed}: changed since install, or not installed by ${skill}$`));
+  });
+}
 
-  // Installed state: the two commands plus an unrelated one.
-  writeFileSync(join(claudeDir, "commands", "decision.md"), "x");
-  writeFileSync(join(claudeDir, "commands", "decision-list.md"), "x");
-  writeFileSync(join(claudeDir, "commands", "other.md"), "keep");
-
-  // settings.json: our Stop hook plus an unrelated Stop hook to preserve.
-  const hookCmd = `node "${join(skillDir, "hooks", "decisions-stop-prompt.js")}"`;
-  const other = { type: "command", command: "node /other/hook.js" };
+test("debug-decisions teardown removes only its exact hook and permissions", async () => {
+  const { default: teardown } = await import(join(SKILLS, "debug-decisions", "teardown.mjs"));
+  const { default: setup } = await import(join(SKILLS, "debug-decisions", "setup.mjs"));
+  const { skillDir, claudeDir } = installed("debug-decisions");
   const settingsPath = join(claudeDir, "settings.json");
+  const foreignHook = { type: "command", command: "node /other/hook.js" };
   writeFileSync(settingsPath, JSON.stringify({
     model: "opus",
-    hooks: { Stop: [{ hooks: [{ type: "command", command: hookCmd }] }, { hooks: [other] }] },
-  }, null, 2));
+    hooks: { Stop: [{ hooks: [foreignHook] }, { matcher: "x", hooks: [] }], PreToolUse: [{ hooks: [] }] },
+    permissions: { allow: ["Bash(git status)", "Bash(~/.claude/skills/debug-decisions/.bin/slug.sh:*)"], deny: ["Read(.env)"] },
+  }));
+  const quiet = recorder().log;
+  await setup({ skillDir, claudeDir, log: quiet });
+  // A group the user put our hook into alongside their own keeps their hook.
+  const s = JSON.parse(readFileSync(settingsPath, "utf8"));
+  const ours = s.hooks.Stop.at(-1).hooks[0];
+  s.hooks.Stop.push({ hooks: [{ ...ours }, { type: "command", command: "node /mine.js" }] });
+  writeFileSync(settingsPath, JSON.stringify(s));
 
-  await teardown({ skillDir, claudeDir, log: noopLog });
+  await teardown({ skillDir, claudeDir, log: quiet });
 
-  // Commands: ours gone, unrelated kept.
-  assert.ok(!existsSync(join(claudeDir, "commands", "decision.md")));
-  assert.ok(!existsSync(join(claudeDir, "commands", "decision-list.md")));
-  assert.ok(existsSync(join(claudeDir, "commands", "other.md")));
-
-  // Hook: ours removed, unrelated preserved, unknown keys intact.
   const after = JSON.parse(readFileSync(settingsPath, "utf8"));
   assert.equal(after.model, "opus");
-  const remaining = after.hooks.Stop.flatMap((g) => g.hooks.map((h) => h.command));
-  assert.deepEqual(remaining, [other.command]);
+  assert.deepEqual(after.hooks.Stop, [
+    { hooks: [foreignHook] },
+    { matcher: "x", hooks: [] },
+    { hooks: [{ type: "command", command: "node /mine.js" }] },
+  ]);
+  assert.deepEqual(after.hooks.PreToolUse, [{ hooks: [] }]);
+  assert.deepEqual(after.permissions, {
+    allow: ["Bash(git status)", "Bash(~/.claude/skills/debug-decisions/.bin/slug.sh:*)"],
+    deny: ["Read(.env)"],
+  });
+  assert.ok(readdirSync(claudeDir).some((f) => f.startsWith("settings.json.bak.")));
+});
 
-  // A backup was written before mutating settings.json.
-  const backups = readdirSync(claudeDir).filter((f) => f.startsWith("settings.json.bak."));
-  assert.equal(backups.length, 1);
+test("debug-decisions teardown keeps its hook when the user changed it, with a warn", async () => {
+  const { default: teardown } = await import(join(SKILLS, "debug-decisions", "teardown.mjs"));
+  const { default: setup } = await import(join(SKILLS, "debug-decisions", "setup.mjs"));
+  const { skillDir, claudeDir } = installed("debug-decisions");
+  await setup({ skillDir, claudeDir, log: recorder().log });
+  const settingsPath = join(claudeDir, "settings.json");
+  const s = JSON.parse(readFileSync(settingsPath, "utf8"));
+  s.hooks.Stop[0].hooks[0].timeout = 30;
+  writeFileSync(settingsPath, JSON.stringify(s));
+  const { warns, log } = recorder();
+  await teardown({ skillDir, claudeDir, log });
+  const after = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.equal(after.hooks.Stop[0].hooks[0].timeout, 30);
+  assert.deepEqual(after.permissions.allow, []);
+  assert.deepEqual(warns, ["debug-decisions: kept a Stop hook on its script: changed since install"]);
+});
+
+/** Run a binary with a temp HOME and a clean env. */
+function run(bin, args, home) {
+  const env = { PATH: process.env.PATH, HOME: home, LANG: "en_US.UTF-8", COLUMNS: "100" };
+  return spawnSync(process.execPath, [join(ROOT, "bin", bin), ...args], { env, input: "", encoding: "utf8" });
+}
+
+test("end to end: uninstall keeps a user-owned command and foreign settings entries", () => {
+  const home = mkdtempSync(join(tmpdir(), "skillkit-home-"));
+  const claude = join(home, ".claude");
+  mkdirSync(join(claude, "commands"), { recursive: true });
+  writeFileSync(join(claude, "commands", "spec-new.md"), "mine");
+  const foreign = { hooks: { Stop: [{ hooks: [{ type: "command", command: "node /other.js" }] }] }, permissions: { allow: ["Bash(ls)"] } };
+  writeFileSync(join(claude, "settings.json"), JSON.stringify(foreign));
+  assert.equal(run("install.mjs", ["spec-versioning", "--no-setup"], home).status, 0);
+  assert.equal(run("install.mjs", ["debug-decisions", "--setup"], home).status, 0);
+
+  const r = run("uninstall.mjs", ["--all", "--yes"], home);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /! kept ~\/\.claude\/commands\/spec-new\.md: changed since install, or not installed by spec-versioning\n/);
+  assert.equal(readFileSync(join(claude, "commands", "spec-new.md"), "utf8"), "mine");
+  assert.deepEqual(readdirSync(join(claude, "commands")), ["spec-new.md"]);
+  assert.deepEqual(JSON.parse(readFileSync(join(claude, "settings.json"), "utf8")), { ...foreign, permissions: { allow: ["Bash(ls)"] } });
 });

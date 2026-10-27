@@ -52,9 +52,10 @@ npm run uninstall
 ```
 
 It lists the skills currently installed in `~/.claude/skills/`, lets you pick by number, asks
-once to confirm (`[y/N]`), then runs each skill's `teardown.mjs` (removing the slash commands it
-installed and de-registering its hooks from `~/.claude/settings.json`, with a backup) and deletes
-the skill directory. A skill whose teardown fails is kept, so you can retry it. Recorded user
+once to confirm (`[y/N]`), then runs each skill's `teardown.mjs` and deletes the skill directory. A teardown removes
+only what its setup wrote: a command file only while it is byte-identical to the skill's copy,
+and in `~/.claude/settings.json` (backed up first) only the exact hook and permission entries
+setup added. A changed or foreign file or entry is kept and reported. A skill whose teardown fails is kept, so you can retry it. Recorded user
 data — e.g. `debug-decisions` decision records under `~/.claude/debug-decisions/` — is **never**
 deleted; remove it by hand if you want it gone.
 
