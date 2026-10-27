@@ -23,21 +23,24 @@ npm start
 
 The wizard prints a numbered list of the available skills; type the numbers you want
 (`1 3`, `1,3`) or `all`, then Enter. Each chosen skill is copied into
-`~/.claude/skills/<name>/`. If a skill is already installed, it asks before overwriting
-(`[y/N]`).
+`~/.claude/skills/<name>/`. If a skill is already installed, it asks before replacing it
+(`[y/N]`); the old folder is removed first, so no stale file survives. A skill folder that is a
+symbolic link is refused, never written through.
 
-Some skills ship extra wiring (slash commands, hooks) via a `setup.mjs`. After copying such a
-skill, the installer asks whether to run its setup (`[y/N]`), which copies commands into
-`~/.claude/commands/` and registers any hooks in `~/.claude/settings.json` (backed up first,
-idempotently).
+Some skills ship extra wiring via a `setup.mjs`: slash commands in `~/.claude/commands/`, hooks
+and Bash permissions in `~/.claude/settings.json` (backed up first, idempotently). After copying
+such a skill, the installer asks whether to run its setup (`[y/N]`), and asks again before
+replacing a command file of yours that differs from the skill's. Setup always runs from the
+catalog's copy, never from what was already in `~/.claude/skills/`.
 
 Name the skills, or pass `--all`, to skip the list. Without a terminal on stdin (CI, a pipe)
-nothing is ever asked: the installer stops and names the missing flag unless you pass
-`--yes`, which answers yes to every overwrite and setup question.
+nothing is ever asked: the installer stops before writing anything and names the missing flag.
+`--yes` confirms replacing installed skills; `--setup` or `--no-setup` decides the wiring
+(`--setup` also replaces differing command files).
 
 ```bash
-npx github:sondalab-ai/skillkit debug-decisions mind-gym
-npx github:sondalab-ai/skillkit --all --yes
+npx github:sondalab-ai/skillkit debug-decisions mind-gym --setup
+npx github:sondalab-ai/skillkit --all --yes --no-setup
 ```
 
 ## Uninstall
@@ -55,18 +58,21 @@ the skill directory. A skill whose teardown fails is kept, so you can retry it. 
 data — e.g. `debug-decisions` decision records under `~/.claude/debug-decisions/` — is **never**
 deleted; remove it by hand if you want it gone.
 
-It takes the same arguments: `npm run uninstall -- mind-gym --yes`, or `--all --yes`. For the
-uninstaller, `--all` means every installed skill that this catalog ships; other directories in
-`~/.claude/skills/` are only removed when named.
+It takes the same arguments: `npm run uninstall -- mind-gym --yes`, or `--all --yes`. A skill
+counts as this catalog's when its folder name is a catalog name, whatever its `SKILL.md` says.
+`--all` (and `all` in the list) takes only those; other folders are marked in the list, are
+removed only when picked by name or number, and get no teardown. If two folders claim one name,
+the uninstaller refuses and lists both.
 
 ## Flags
 
-Both commands accept:
+Both commands accept, except where noted:
 
 | Flag | Effect |
 | --- | --- |
-| `--all` | Every catalog skill, no selection list |
-| `-y`, `--yes` | Answer yes to every confirmation; required without a terminal |
+| `--all` | Every catalog skill, no selection list; not with skill names |
+| `-y`, `--yes` | Confirm replacing (install) or removing (uninstall) skill folders |
+| `--setup`, `--no-setup` | Install only: run or skip setup (hooks, commands, Bash permissions) without asking |
 | `--ascii` | ASCII glyphs only (also `SONDALAB_ASCII=1`, `TERM=dumb` or a non-UTF-8 locale) |
 | `--color`, `--no-color` | Force colour on or off; otherwise `NO_COLOR`, then `FORCE_COLOR`, then terminal detection |
 | `--debug` | Print the stack trace after an error |
