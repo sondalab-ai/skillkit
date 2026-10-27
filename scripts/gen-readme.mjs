@@ -2,6 +2,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { asciiMode, colorMode, stepLine } from "@sondalab/ui-kit/term.js";
 import { discoverSkills } from "../lib/skills.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -14,7 +15,7 @@ const END = "<!-- SKILLS:END -->";
 export function renderTable(skills) {
   const header = "| Skill | Description |\n| --- | --- |";
   if (skills.length === 0) {
-    return `${header}\n| _Nessuna skill ancora._ | |`;
+    return `${header}\n| _No skills yet._ | |`;
   }
   const rows = skills.map(
     (s) => `| \`${s.name}\` | ${s.description.replace(/\|/g, "\\|")} |`,
@@ -39,7 +40,8 @@ function main() {
   const readme = readFileSync(README, "utf8");
   const updated = injectTable(readme, renderTable(skills));
   writeFileSync(README, updated);
-  process.stdout.write(`README aggiornato — ${skills.length} skill.\n`);
+  const line = stepLine("done", "Updated README", `${skills.length} skills`, { ascii: asciiMode(), mode: colorMode() });
+  process.stdout.write(line + "\n");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) main();

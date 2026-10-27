@@ -2,81 +2,69 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
-import {
-  intro,
-  outro,
-  multiselect,
-  confirm,
-  isCancel,
-  cancel,
-  log,
-} from "@clack/prompts";
+import { GLYPHS, needsPrompt, paint } from "@sondalab/ui-kit/term.js";
 import { discoverSkills } from "../lib/skills.mjs";
 import { loadTeardown } from "../lib/setup.mjs";
+import { runCli, pickSkills, shellLine, tildify } from "../lib/cli.mjs";
+import { chooseMany, confirm } from "../lib/prompt.mjs";
 
-const TARGET_DIR = join(homedir(), ".claude", "skills");
+const COMMAND = "skillkit-uninstall";
+const DESCRIPTION = "Remove installed skills and the commands and hooks they added.";
 const CLAUDE_DIR = join(homedir(), ".claude");
+const TARGET_DIR = join(CLAUDE_DIR, "skills");
 
-function bail() {
-  cancel("Disinstallazione annullata.");
-  process.exit(0);
-}
+/**
+ * Tear down and delete the picked skills after one [y/N], or --yes off a TTY.
+ * A skill whose teardown fails is kept, so the printed rerun can retry it.
+ */
+async function uninstall(flags, ui, argv) {
+  if (flags.version) return ui.lockup();
+  if (flags.help) return ui.help(`${COMMAND} [skill...] [flags]`, DESCRIPTION);
 
-async function main() {
-  intro("skillkit uninstaller");
+  const interactive = !flags.all && !flags.names.length;
+  ui.header(DESCRIPTION, { compact: !interactive });
 
-  const skills = discoverSkills(TARGET_DIR);
-  if (skills.length === 0) {
-    outro(`Nessuna skill installata in ${TARGET_DIR}.`);
-    return;
+  const skills = discoverSkills(TARGET_DIR, { warn: ui.warn });
+  if (!skills.length) {
+    const sep = paint(ui.ascii ? GLYPHS.separator.ascii : GLYPHS.separator.unicode, GLYPHS.separator.role, ui.mode);
+    process.stdout.write(`No skills in ${tildify(TARGET_DIR)} ${sep} install one with skillkit\n`);
+    return 0;
   }
 
-  const selected = await multiselect({
-    message: "Quali skill disinstallare?",
-    options: skills.map((s) => ({
-      value: s.name,
-      label: s.name,
-      hint: s.description,
-    })),
-    required: false,
+  const picked = await pickSkills(skills, flags, {
+    command: COMMAND, question: "Uninstall which skills?", argv, ui, choose: chooseMany,
   });
-  if (isCancel(selected)) bail();
-  if (!selected.length) {
-    outro("Nessuna skill selezionata.");
-    return;
+  const names = picked.map((s) => s.name).join(", ");
+  const ask = needsPrompt("--yes", {
+    given: flags.yes, what: `Could not confirm removing ${names}`, command: shellLine([COMMAND, ...argv]),
+  });
+  if (ask && !(await confirm(`Remove ${names} and the commands and hooks they added?`, { mode: ui.errMode }))) {
+    ui.step("skipped", "Removed nothing", "declined");
+    return 0;
   }
 
-  let removed = 0;
-  for (const name of selected) {
-    const skill = skills.find((s) => s.name === name);
-    const dest = skill.dir;
-
-    const teardown = await loadTeardown(dest);
+  const counts = { ok: 0, fixed: 0, warn: 0, failed: 0 };
+  for (const skill of picked) {
+    const teardown = await loadTeardown(skill.dir);
     if (teardown) {
-      const runIt = await confirm({
-        message: `Run teardown for "${skill.name}"? (removes commands/hooks)`,
-        initialValue: true,
-      });
-      if (isCancel(runIt)) bail();
-      if (runIt) {
-        try {
-          await teardown({ skillDir: dest, claudeDir: CLAUDE_DIR, log });
-          log.success(`Unwired: ${skill.name}`);
-        } catch (err) {
-          log.error(`Teardown failed for ${skill.name}: ${err.message}`);
-        }
+      try {
+        await teardown({ skillDir: skill.dir, claudeDir: CLAUDE_DIR, log: ui.log });
+        ui.step("done", `Unwired ${skill.name}`, "commands and hooks");
+      } catch (err) {
+        ui.report(err, { what: `Could not unwire ${skill.name}`, rerun: [skill.name, "--yes"] });
+        counts.failed++;
+        continue;
       }
     }
-
-    rmSync(dest, { recursive: true, force: true });
-    log.success(`Rimossa: ${skill.name}`);
-    removed++;
+    rmSync(skill.dir, { recursive: true, force: true });
+    ui.step("done", `Removed ${skill.name}`, tildify(skill.dir));
+    counts.ok++;
   }
 
-  outro(`Fatto — ${removed} disinstallate. Target: ${TARGET_DIR}`);
+  ui.summary(counts);
+  return counts.failed ? 1 : 0;
 }
 
-main().catch((err) => {
-  log.error(err.stack || String(err));
-  process.exit(1);
+runCli(process.argv.slice(2), { command: COMMAND, what: "Could not uninstall skills" }, uninstall).then((code) => {
+  process.exitCode = code;
 });

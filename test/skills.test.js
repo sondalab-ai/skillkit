@@ -43,8 +43,13 @@ test("discoverSkills skips malformed frontmatter without throwing", () => {
   const root = tmpRoot();
   writeSkill(root, "good", "---\nname: good\ndescription: ok\n---");
   writeSkill(root, "bad", "---\nname: [unterminated\n---");
-  const skills = discoverSkills(root);
+  const warned = [];
+  const skills = discoverSkills(root, { warn: (label, detail) => warned.push([label, detail]) });
   assert.deepEqual(skills.map((s) => s.name), ["good"]);
+  assert.equal(warned.length, 1);
+  assert.equal(warned[0][0], "Skipped bad");
+  assert.match(warned[0][1], /^invalid SKILL\.md: /);
+  assert.doesNotMatch(warned[0][1], /\n/);
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -80,7 +85,7 @@ test("renderTable renders rows and escapes pipes", () => {
 });
 
 test("renderTable shows placeholder for empty catalog", () => {
-  assert.match(renderTable([]), /Nessuna skill ancora/);
+  assert.match(renderTable([]), /No skills yet/);
 });
 
 test("injectTable replaces only between markers, keeping surrounding text", () => {

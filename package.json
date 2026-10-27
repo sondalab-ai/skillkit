@@ -11,6 +11,9 @@
     "access": "public"
   },
   "type": "module",
+  "engines": {
+    "node": ">=18.3"
+  },
   "bin": {
     "skillkit": "bin/install.mjs",
     "skillkit-install": "bin/install.mjs",
@@ -24,7 +27,7 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@clack/prompts": "^0.7.0",
+    "@sondalab/ui-kit": "^0.43.0",
     "gray-matter": "^4.0.3"
   }
 }
