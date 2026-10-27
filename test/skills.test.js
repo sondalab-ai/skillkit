@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { discoverSkills, copySkill } from "../lib/skills.mjs";
@@ -99,4 +99,29 @@ test("injectTable replaces only between markers, keeping surrounding text", () =
 
 test("injectTable throws when markers are missing", () => {
   assert.throws(() => injectTable("no markers here", "X"), /markers/);
+});
+
+test("discoverSkills skips a dangling symlink with a warning", () => {
+  const root = tmpRoot();
+  writeSkill(root, "good", "---\nname: good\ndescription: ok\n---");
+  symlinkSync(join(root, "nowhere"), join(root, "dangling"));
+  const warned = [];
+  const skills = discoverSkills(root, { warn: (label, detail) => warned.push([label, detail]) });
+  assert.deepEqual(skills.map((s) => s.name), ["good"]);
+  assert.deepEqual(warned, [["Skipped dangling", "broken symbolic link"]]);
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("copySkill removes files the source no longer has", () => {
+  const root = tmpRoot();
+  const src = join(root, "src");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, "SKILL.md"), "main");
+  const dest = join(root, "dest");
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, "stale.mjs"), "old");
+  copySkill(src, dest);
+  assert.ok(!existsSync(join(dest, "stale.mjs")));
+  assert.equal(readFileSync(join(dest, "SKILL.md"), "utf8"), "main");
+  rmSync(root, { recursive: true, force: true });
 });
