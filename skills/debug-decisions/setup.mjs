@@ -2,8 +2,23 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import {
   mkdirSync, copyFileSync, readFileSync, writeFileSync,
-  existsSync, readdirSync,
+  existsSync, readdirSync, constants,
 } from "node:fs";
+
+/** What this setup writes to settings.json, shown by the installer's prompt. */
+export const settingsAdds = ["a Stop hook", "Bash permissions for its .bin scripts"];
+
+/** Back up `path` to `<path>.bak.<ts>`, never overwriting: a counter is appended on a clash. */
+function backup(path) {
+  const base = `${path}.bak.${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  for (let i = 0; ; i++) {
+    try {
+      return copyFileSync(path, i ? `${base}.${i}` : base, constants.COPYFILE_EXCL);
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+  }
+}
 
 export default async function setup({ skillDir, claudeDir, log }) {
   // 1. Install slash commands.
@@ -27,10 +42,7 @@ export default async function setup({ skillDir, claudeDir, log }) {
     (g.hooks ?? []).some((h) => h.command === hookCmd));
 
   if (!already) {
-    if (existsSync(settingsPath)) {
-      const ts = new Date().toISOString().replace(/[:.]/g, "-");
-      copyFileSync(settingsPath, `${settingsPath}.bak.${ts}`);
-    }
+    if (existsSync(settingsPath)) backup(settingsPath);
     settings.hooks.Stop.push({
       hooks: [{
         type: "command",

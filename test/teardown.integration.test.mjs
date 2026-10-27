@@ -84,7 +84,7 @@ test("debug-decisions teardown removes only its exact hook and permissions", asy
   assert.ok(readdirSync(claudeDir).some((f) => f.startsWith("settings.json.bak.")));
 });
 
-test("debug-decisions teardown keeps its hook when the user changed it, with a warn", async () => {
+test("debug-decisions teardown removes its hook even when the user changed it, warning what changed", async () => {
   const { default: teardown } = await import(join(SKILLS, "debug-decisions", "teardown.mjs"));
   const { default: setup } = await import(join(SKILLS, "debug-decisions", "setup.mjs"));
   const { skillDir, claudeDir } = installed("debug-decisions");
@@ -96,9 +96,42 @@ test("debug-decisions teardown keeps its hook when the user changed it, with a w
   const { warns, log } = recorder();
   await teardown({ skillDir, claudeDir, log });
   const after = JSON.parse(readFileSync(settingsPath, "utf8"));
-  assert.equal(after.hooks.Stop[0].hooks[0].timeout, 30);
+  assert.equal(after.hooks.Stop, undefined);
   assert.deepEqual(after.permissions.allow, []);
-  assert.deepEqual(warns, ["debug-decisions: kept a Stop hook on its script: changed since install"]);
+  assert.deepEqual(warns, ["debug-decisions: removed its Stop hook though timeout changed since install"]);
+});
+
+test("debug-decisions teardown fails on an unreadable settings.json before deleting anything", async () => {
+  const { default: teardown } = await import(join(SKILLS, "debug-decisions", "teardown.mjs"));
+  const { skillDir, claudeDir, shipped } = installed("debug-decisions");
+  writeFileSync(join(claudeDir, "settings.json"), "{ not json");
+  await assert.rejects(teardown({ skillDir, claudeDir, log: recorder().log }), /settings\.json is not valid JSON .*nothing was removed/);
+  for (const f of shipped) assert.ok(existsSync(join(claudeDir, "commands", f)), f);
+});
+
+test("backups never overwrite: a second backup in the same instant gets a counter", async () => {
+  const { backupFile } = await import(join(ROOT, "lib", "setup.mjs"));
+  const dir = mkdtempSync(join(tmpdir(), "backup-"));
+  const file = join(dir, "settings.json");
+  writeFileSync(file, "one");
+  const a = backupFile(file);
+  writeFileSync(file, "two");
+  writeFileSync(a + ".1", "taken");
+  const b = backupFile(file);
+  assert.notEqual(a, b);
+  assert.equal(readFileSync(a, "utf8"), "one");
+  assert.equal(readFileSync(b, "utf8"), "two");
+});
+
+test("the inlined removeOwnedCommands is byte-identical in every teardown", () => {
+  const extract = (skill) => {
+    const src = readFileSync(join(SKILLS, skill, "teardown.mjs"), "utf8");
+    const start = src.lastIndexOf("/**", src.indexOf("function removeOwnedCommands"));
+    return src.slice(start, src.indexOf("\n}\n", start) + 3);
+  };
+  const copies = WITH_TEARDOWN.map(extract);
+  assert.ok(copies[0].includes("function removeOwnedCommands"));
+  for (const [i, copy] of copies.entries()) assert.equal(copy, copies[0], WITH_TEARDOWN[i]);
 });
 
 /** Run a binary with a temp HOME and a clean env. */
