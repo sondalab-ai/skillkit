@@ -23,20 +23,22 @@ npm start
 
 The wizard prints a numbered list of the available skills; type the numbers you want
 (`1 3`, `1,3`) or `all`, then Enter. Each chosen skill is copied into
-`~/.claude/skills/<name>/`. If a skill is already installed, it asks before replacing it
+`~/.claude/skills/<folder>/`, named after its folder in `skills/` (the `name` in `SKILL.md`
+must match it; a test checks). If a skill is already installed, it asks before replacing it
 (`[y/N]`); the old folder is removed first, so no stale file survives. A skill folder that is a
 symbolic link is refused, never written through.
 
 Some skills ship extra wiring via a `setup.mjs`: slash commands in `~/.claude/commands/`, hooks
 and Bash permissions in `~/.claude/settings.json` (backed up first, idempotently). After copying
-such a skill, the installer asks whether to run its setup (`[y/N]`), and asks again before
-replacing a command file of yours that differs from the skill's. Setup always runs from the
-catalog's copy, never from what was already in `~/.claude/skills/`.
+such a skill, the installer says what that setup adds and asks whether to run it (`[y/N]`). A
+command file of yours that differs from the skill's is replaced only with `--yes` or a yes at a
+second prompt, and is backed up first; otherwise it is kept and reported. Setup always runs
+from the catalog's copy, never from what was already in `~/.claude/skills/`.
 
 Name the skills, or pass `--all`, to skip the list. Without a terminal on stdin (CI, a pipe)
 nothing is ever asked: the installer stops before writing anything and names the missing flag.
-`--yes` confirms replacing installed skills; `--setup` or `--no-setup` decides the wiring
-(`--setup` also replaces differing command files).
+`--yes` confirms replacing installed skills and differing command files; `--setup` or
+`--no-setup` decides the wiring.
 
 ```bash
 npx github:sondalab-ai/skillkit debug-decisions mind-gym --setup
@@ -72,7 +74,7 @@ Both commands accept, except where noted:
 | Flag | Effect |
 | --- | --- |
 | `--all` | Every catalog skill, no selection list; not with skill names |
-| `-y`, `--yes` | Confirm replacing (install) or removing (uninstall) skill folders |
+| `-y`, `--yes` | Confirm replacing skill folders and differing command files (install) or removing folders (uninstall) |
 | `--setup`, `--no-setup` | Install only: run or skip setup (hooks, commands, Bash permissions) without asking |
 | `--ascii` | ASCII glyphs only (also `SONDALAB_ASCII=1`, `TERM=dumb` or a non-UTF-8 locale) |
 | `--color`, `--no-color` | Force colour on or off; otherwise `NO_COLOR`, then `FORCE_COLOR`, then terminal detection |
