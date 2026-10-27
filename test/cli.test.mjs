@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -134,4 +134,17 @@ test("the setup log keeps clack's method names and prints continuation lines", (
     "    info text", "    success text", "    step text", "    message text",
     "    ! warn text", "    ! warning text", "    x error text", "",
   ].join("\n"));
+});
+
+test("uninstall --all removes only skills this catalog ships", () => {
+  const home = run(INSTALL, ["mind-gym", "--yes"]).home;
+  const foreign = join(home, ".claude", "skills", "my-own");
+  mkdirSync(foreign, { recursive: true });
+  writeFileSync(join(foreign, "SKILL.md"), "---\nname: my-own\ndescription: x\n---\n");
+  const r = run(UNINSTALL, ["--all", "--yes"], { home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!existsSync(join(home, ".claude", "skills", "mind-gym")));
+  assert.ok(existsSync(join(foreign, "SKILL.md")));
+  assert.match(r.stdout, /Removed mind-gym/);
+  assert.doesNotMatch(r.stdout, /my-own/);
 });

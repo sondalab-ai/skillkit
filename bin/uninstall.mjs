@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
 import { GLYPHS, needsPrompt, paint } from "@sondalab/ui-kit/term.js";
-import { discoverSkills } from "../lib/skills.mjs";
+import { SKILLS_DIR, discoverSkills } from "../lib/skills.mjs";
 import { loadTeardown } from "../lib/setup.mjs";
 import { runCli, pickSkills, shellLine, tildify } from "../lib/cli.mjs";
 import { chooseMany, confirm } from "../lib/prompt.mjs";
@@ -15,7 +15,8 @@ const TARGET_DIR = join(CLAUDE_DIR, "skills");
 
 /**
  * Tear down and delete the picked skills after one [y/N], or --yes off a TTY.
- * A skill whose teardown fails is kept, so the printed rerun can retry it.
+ * --all takes only installed skills this catalog ships, never other directories
+ * in ~/.claude/skills. A skill whose teardown fails is kept, so the rerun can retry it.
  */
 async function uninstall(flags, ui, argv) {
   if (flags.version) return ui.lockup();
@@ -31,7 +32,13 @@ async function uninstall(flags, ui, argv) {
     return 0;
   }
 
-  const picked = await pickSkills(skills, flags, {
+  const catalog = new Set(discoverSkills(SKILLS_DIR, { warn: () => {} }).map((s) => s.name));
+  const pool = flags.all ? skills.filter((s) => catalog.has(s.name)) : skills;
+  if (!pool.length) {
+    ui.step("skipped", "Removed nothing", `no skillkit skills in ${tildify(TARGET_DIR)}`);
+    return 0;
+  }
+  const picked = await pickSkills(pool, flags, {
     command: COMMAND, question: "Uninstall which skills?", argv, ui, choose: chooseMany,
   });
   const names = picked.map((s) => s.name).join(", ");

@@ -11,7 +11,7 @@ function io(text) {
   input.end(text);
   let written = "";
   const output = { write: (chunk) => { written += chunk; return true; } };
-  return { input, output, written: () => written };
+  return { input, output, env: { COLUMNS: "100" }, written: () => written };
 }
 
 const OPTIONS = [["alpha", "first"], ["beta", "second"], ["gamma", ""]];

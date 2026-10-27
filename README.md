@@ -55,7 +55,9 @@ the skill directory. A skill whose teardown fails is kept, so you can retry it. 
 data — e.g. `debug-decisions` decision records under `~/.claude/debug-decisions/` — is **never**
 deleted; remove it by hand if you want it gone.
 
-It takes the same arguments: `npm run uninstall -- mind-gym --yes`, or `--all --yes`.
+It takes the same arguments: `npm run uninstall -- mind-gym --yes`, or `--all --yes`. For the
+uninstaller, `--all` means every installed skill that this catalog ships; other directories in
+`~/.claude/skills/` are only removed when named.
 
 ## Flags
 
@@ -63,7 +65,7 @@ Both commands accept:
 
 | Flag | Effect |
 | --- | --- |
-| `--all` | Every skill, no selection list |
+| `--all` | Every catalog skill, no selection list |
 | `-y`, `--yes` | Answer yes to every confirmation; required without a terminal |
 | `--ascii` | ASCII glyphs only (also `SONDALAB_ASCII=1`, `TERM=dumb` or a non-UTF-8 locale) |
 | `--color`, `--no-color` | Force colour on or off; otherwise `NO_COLOR`, then `FORCE_COLOR`, then terminal detection |
