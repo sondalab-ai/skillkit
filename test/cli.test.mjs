@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,11 +31,83 @@ test("non-TTY without a selection stops with MissingFlag naming --all", () => {
   assert.match(r.stderr, /^  ✗ Could not choose skills\n    stdin is not a terminal, so nothing can be asked, and --all was not passed\n    Try: skillkit --all\n$/);
 });
 
-test("non-TTY --all without --yes names --yes and writes nothing", () => {
-  const r = run(INSTALL, ["--all"]);
+test("non-TTY --all without a setup flag names --setup and --no-setup and writes nothing", () => {
+  const r = run(INSTALL, ["--all", "--yes"]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /--yes was not passed\n    Try: skillkit --all --yes\n$/);
+  assert.match(r.stderr, /^  ✗ Could not confirm setup for debug-decisions, memory-org, spec-versioning, sync-skills\n/);
+  assert.match(r.stderr, /pass --setup to add hooks, commands and Bash\s+permissions, or --no-setup to skip them\n    Try: skillkit --all --yes --setup\n$/);
   assert.ok(!existsSync(join(r.home, ".claude", "skills")));
+});
+
+test("non-TTY install over an existing skill without --yes writes nothing; --yes replaces it", () => {
+  const home = run(INSTALL, ["mind-gym"]).home;
+  const dest = join(home, ".claude", "skills", "mind-gym");
+  writeFileSync(join(dest, "leftover.txt"), "old");
+  const refused = run(INSTALL, ["mind-gym"], { home });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Could not confirm overwriting mind-gym\n[\s\S]*Try: skillkit mind-gym --yes\n$/);
+  assert.equal(readFileSync(join(dest, "leftover.txt"), "utf8"), "old");
+  const replaced = run(INSTALL, ["mind-gym", "--yes"], { home });
+  assert.equal(replaced.status, 0, replaced.stderr);
+  assert.ok(!existsSync(join(dest, "leftover.txt")));
+  assert.ok(existsSync(join(dest, "SKILL.md")));
+});
+
+test("install refuses a symlinked skill folder and leaves the link target untouched", () => {
+  const home = mkdtempSync(join(tmpdir(), "skillkit-home-"));
+  const target = mkdtempSync(join(tmpdir(), "skillkit-target-"));
+  writeFileSync(join(target, "mine.txt"), "keep");
+  mkdirSync(join(home, ".claude", "skills"), { recursive: true });
+  symlinkSync(target, join(home, ".claude", "skills", "mind-gym"));
+  const r = run(INSTALL, ["mind-gym", "--yes"], { home });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /^  ✗ Could not install mind-gym\n    ~\/\.claude\/skills\/mind-gym is a symbolic link to/);
+  assert.match(r.stderr, /Try: rm [^\n]*\.claude\/skills\/mind-gym\n$/);
+  assert.deepEqual(readdirSync(target), ["mine.txt"]);
+  assert.equal(readFileSync(join(target, "mine.txt"), "utf8"), "keep");
+});
+
+test("a leftover setup.mjs the catalog never shipped does not run, and is removed", () => {
+  const home = run(INSTALL, ["mind-gym"]).home;
+  const dest = join(home, ".claude", "skills", "mind-gym");
+  const marker = join(home, "ran");
+  writeFileSync(join(dest, "setup.mjs"), `import { writeFileSync } from "node:fs"; export default async () => writeFileSync(${JSON.stringify(marker)}, "x");\n`);
+  const r = run(INSTALL, ["mind-gym", "--yes", "--setup"], { home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!existsSync(marker));
+  assert.ok(!existsSync(join(dest, "setup.mjs")));
+});
+
+test("--no-setup counts the skipped setup as warn and leaves settings.json and commands alone", () => {
+  const home = mkdtempSync(join(tmpdir(), "skillkit-home-"));
+  mkdirSync(join(home, ".claude", "commands"), { recursive: true });
+  writeFileSync(join(home, ".claude", "settings.json"), "{\"model\":\"x\"}\n");
+  writeFileSync(join(home, ".claude", "commands", "memory-setup.md"), "mine");
+  const r = run(INSTALL, ["memory-org", "debug-decisions", "--no-setup"], { home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /↷ Not wired debug-decisions\s+setup declined\n/);
+  assert.match(r.stdout, /Summary  2 ok · 0 fixed · 2 warn · 0 failed\n/);
+  assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), "{\"model\":\"x\"}\n");
+  assert.equal(readFileSync(join(home, ".claude", "commands", "memory-setup.md"), "utf8"), "mine");
+});
+
+test("--setup runs setup with no prompt", () => {
+  const r = run(INSTALL, ["spec-versioning", "--setup"]);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /✓ Wired spec-versioning/);
+  assert.ok(existsSync(join(r.home, ".claude", "commands", "spec-new.md")));
+});
+
+test("skill names together with --all exit 2, for install and uninstall", () => {
+  for (const bin of [INSTALL, UNINSTALL]) {
+    const r = run(bin, ["mind-gym", "--all"]);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /Could not combine skill names with --all/);
+  }
+});
+
+test("--setup with --no-setup is a usage error", () => {
+  assert.equal(run(INSTALL, ["mind-gym", "--setup", "--no-setup"]).status, 2);
 });
 
 test("non-TTY uninstall without --yes names --yes and removes nothing", () => {
@@ -147,4 +219,53 @@ test("uninstall --all removes only skills this catalog ships", () => {
   assert.ok(existsSync(join(foreign, "SKILL.md")));
   assert.match(r.stdout, /Removed mind-gym/);
   assert.doesNotMatch(r.stdout, /my-own/);
+});
+
+/** A temp HOME with `folder` installed as a copy of catalog mind-gym, frontmatter name `name`. */
+function forkHome(folders) {
+  const home = mkdtempSync(join(tmpdir(), "skillkit-home-"));
+  for (const [folder, name] of folders) {
+    const dir = join(home, ".claude", "skills", folder);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "SKILL.md"), `---\nname: ${name}\ndescription: fork\n---\n`);
+  }
+  return home;
+}
+
+test("uninstall --all goes by folder name: a fork named mind-gym in its frontmatter is kept", () => {
+  const home = forkHome([["my-fork", "mind-gym"]]);
+  const r = run(UNINSTALL, ["--all", "--yes"], { home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Removed nothing/);
+  assert.ok(existsSync(join(home, ".claude", "skills", "my-fork", "SKILL.md")));
+  assert.equal(run(UNINSTALL, ["mind-gym", "--yes"], { home }).status, 2);
+});
+
+test("uninstall refuses when two folders claim one name, listing both paths", () => {
+  const home = forkHome([["my-fork", "mind-gym"], ["mind-gym", "mind-gym"]]);
+  for (const args of [["mind-gym", "--yes"], ["--all", "--yes"]]) {
+    const r = run(UNINSTALL, args, { home });
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /Could not pick mind-gym\n    more than one folder claims the name mind-gym: ~\/\.claude\/skills\/mind-gym,\s+~\/\.claude\/skills\/my-fork/);
+  }
+  assert.ok(existsSync(join(home, ".claude", "skills", "mind-gym")));
+  assert.ok(existsSync(join(home, ".claude", "skills", "my-fork")));
+});
+
+test("a foreign folder named explicitly is removed without a teardown", () => {
+  const home = forkHome([["my-own", "my-own"]]);
+  const r = run(UNINSTALL, ["my-own", "--yes"], { home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /Unwired/);
+  assert.ok(!existsSync(join(home, ".claude", "skills", "my-own")));
+});
+
+test("a failing teardown keeps the skill folder and exits 1", () => {
+  const home = run(INSTALL, ["debug-decisions", "--no-setup"]).home;
+  writeFileSync(join(home, ".claude", "settings.json"), "{ not json");
+  const r = run(UNINSTALL, ["debug-decisions", "--yes"], { home });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /✗ Could not unwire debug-decisions\n/);
+  assert.match(r.stdout, /Summary  0 ok · 0 fixed · 0 warn · 1 failed\n/);
+  assert.ok(existsSync(join(home, ".claude", "skills", "debug-decisions", "SKILL.md")));
 });

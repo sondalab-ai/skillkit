@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { rmSync } from "node:fs";
-import { GLYPHS, needsPrompt, paint } from "@sondalab/ui-kit/term.js";
+import { GLYPHS, TermError, needsPrompt, paint } from "@sondalab/ui-kit/term.js";
 import { SKILLS_DIR, discoverSkills } from "../lib/skills.mjs";
 import { loadTeardown } from "../lib/setup.mjs";
 import { runCli, pickSkills, shellLine, tildify } from "../lib/cli.mjs";
@@ -13,10 +13,33 @@ const DESCRIPTION = "Remove installed skills and the commands and hooks they add
 const CLAUDE_DIR = join(homedir(), ".claude");
 const TARGET_DIR = join(CLAUDE_DIR, "skills");
 
+/** An installed skill's identity: its folder name, never its frontmatter name. */
+const idOf = (skill) => basename(skill.dir);
+
 /**
- * Tear down and delete the picked skills after one [y/N], or --yes off a TTY.
- * --all takes only installed skills this catalog ships, never other directories
- * in ~/.claude/skills. A skill whose teardown fails is kept, so the rerun can retry it.
+ * Throw when another installed folder claims a picked skill's name in its
+ * frontmatter, listing every claimant, so a fork is never taken for the original.
+ */
+function refuseAmbiguous(picked, installed) {
+  for (const skill of picked) {
+    const id = idOf(skill);
+    const claimants = installed.filter((s) => idOf(s) === id || s.name === id);
+    if (claimants.length > 1) {
+      throw new TermError(
+        `Could not pick ${id}`,
+        `more than one folder claims the name ${id}: ${claimants.map((s) => tildify(s.dir)).join(", ")}`,
+        `grep -H '^name:' ${tildify(TARGET_DIR)}/*/SKILL.md`,
+      );
+    }
+  }
+}
+
+/**
+ * Remove the picked skills after one [y/N], or --yes off a TTY. A skill is
+ * from the catalog when its folder name is a catalog name: only those get
+ * their teardown (loaded from the catalog copy) and only those are in --all
+ * or `all`. Other folders are removed as plain folders, only when picked by
+ * name or number. A skill whose teardown fails is kept, so a rerun can retry.
  */
 async function uninstall(flags, ui, argv) {
   if (flags.version) return ui.lockup();
@@ -25,23 +48,28 @@ async function uninstall(flags, ui, argv) {
   const interactive = !flags.all && !flags.names.length;
   ui.header(DESCRIPTION, { compact: !interactive });
 
-  const skills = discoverSkills(TARGET_DIR, { warn: ui.warn });
-  if (!skills.length) {
+  const installed = discoverSkills(TARGET_DIR, { warn: ui.warn });
+  if (!installed.length) {
     const sep = paint(ui.ascii ? GLYPHS.separator.ascii : GLYPHS.separator.unicode, GLYPHS.separator.role, ui.mode);
     process.stdout.write(`No skills in ${tildify(TARGET_DIR)} ${sep} install one with skillkit\n`);
     return 0;
   }
 
-  const catalog = new Set(discoverSkills(SKILLS_DIR, { warn: () => {} }).map((s) => s.name));
-  const pool = flags.all ? skills.filter((s) => catalog.has(s.name)) : skills;
-  if (!pool.length) {
+  const catalog = new Map(discoverSkills(SKILLS_DIR, { warn: () => {} }).map((s) => [s.name, s]));
+  const fromCatalog = (s) => catalog.has(idOf(s));
+  if (flags.all && !installed.some(fromCatalog)) {
     ui.step("skipped", "Removed nothing", `no skillkit skills in ${tildify(TARGET_DIR)}`);
     return 0;
   }
-  const picked = await pickSkills(pool, flags, {
-    command: COMMAND, question: "Uninstall which skills?", argv, ui, choose: chooseMany,
+  const picked = await pickSkills(installed, flags, {
+    command: COMMAND, question: "Uninstall which skills? (all: skillkit's only)", argv, ui, choose: chooseMany,
+    keyOf: idOf,
+    allOf: (list) => list.filter(fromCatalog),
+    labelOf: (s) => [idOf(s), fromCatalog(s) ? s.description : `(not from skillkit) ${s.description}`],
   });
-  const names = picked.map((s) => s.name).join(", ");
+  refuseAmbiguous(picked, installed);
+
+  const names = picked.map(idOf).join(", ");
   const ask = needsPrompt("--yes", {
     given: flags.yes, what: `Could not confirm removing ${names}`, command: shellLine([COMMAND, ...argv]),
   });
@@ -51,21 +79,27 @@ async function uninstall(flags, ui, argv) {
   }
 
   const counts = { ok: 0, fixed: 0, warn: 0, failed: 0 };
-  for (const skill of picked) {
-    const teardown = await loadTeardown(skill.dir);
-    if (teardown) {
-      try {
-        await teardown({ skillDir: skill.dir, claudeDir: CLAUDE_DIR, log: ui.log });
-        ui.step("done", `Unwired ${skill.name}`, "commands and hooks");
-      } catch (err) {
-        ui.report(err, { what: `Could not unwire ${skill.name}`, rerun: [skill.name, "--yes"] });
-        counts.failed++;
-        continue;
+  try {
+    for (const skill of picked) {
+      const id = idOf(skill);
+      const teardown = fromCatalog(skill) ? await loadTeardown(catalog.get(id).dir) : null;
+      if (teardown) {
+        try {
+          await teardown({ skillDir: skill.dir, claudeDir: CLAUDE_DIR, log: ui.log });
+          ui.step("done", `Unwired ${id}`, "hooks, commands, permissions");
+        } catch (err) {
+          ui.report(err, { what: `Could not unwire ${id}`, rerun: [id, "--yes"] });
+          counts.failed++;
+          continue;
+        }
       }
+      rmSync(skill.dir, { recursive: true, force: true });
+      ui.step("done", `Removed ${id}`, tildify(skill.dir));
+      counts.ok++;
     }
-    rmSync(skill.dir, { recursive: true, force: true });
-    ui.step("done", `Removed ${skill.name}`, tildify(skill.dir));
-    counts.ok++;
+  } catch (err) {
+    ui.summary(counts);
+    throw err;
   }
 
   ui.summary(counts);
