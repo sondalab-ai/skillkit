@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, readdirSync, symlinkSync, cpSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +35,7 @@ test("non-TTY --all without a setup flag names --setup and --no-setup and writes
   const r = run(INSTALL, ["--all", "--yes"]);
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^  ✗ Could not confirm setup for debug-decisions, memory-org, spec-versioning, sync-skills\n/);
-  assert.match(r.stderr, /pass --setup to add hooks, commands and Bash\s+permissions, or --no-setup to skip them\n    Try: skillkit --all --yes --setup\n$/);
+  assert.match(r.stderr, /pass --no-setup to skip it, or --setup to add\s+what it adds\n    Try: skillkit --all --yes --no-setup\n$/);
   assert.ok(!existsSync(join(r.home, ".claude", "skills")));
 });
 
@@ -85,7 +85,7 @@ test("--no-setup counts the skipped setup as warn and leaves settings.json and c
   writeFileSync(join(home, ".claude", "commands", "memory-setup.md"), "mine");
   const r = run(INSTALL, ["memory-org", "debug-decisions", "--no-setup"], { home });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /↷ Not wired debug-decisions\s+setup declined\n/);
+  assert.match(r.stdout, /↷ Not wired debug-decisions\s+skipped \(--no-setup\)\n/);
   assert.match(r.stdout, /Summary  2 ok · 0 fixed · 2 warn · 0 failed\n/);
   assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), "{\"model\":\"x\"}\n");
   assert.equal(readFileSync(join(home, ".claude", "commands", "memory-setup.md"), "utf8"), "mine");
@@ -268,4 +268,54 @@ test("a failing teardown keeps the skill folder and exits 1", () => {
   assert.match(r.stderr, /✗ Could not unwire debug-decisions\n/);
   assert.match(r.stdout, /Summary  0 ok · 0 fixed · 0 warn · 1 failed\n/);
   assert.ok(existsSync(join(home, ".claude", "skills", "debug-decisions", "SKILL.md")));
+});
+
+/** A throwaway copy of the package whose catalog is `skills`: [folder, SKILL.md frontmatter name]. */
+function fakeRepo(skills) {
+  const repo = mkdtempSync(join(tmpdir(), "skillkit-repo-"));
+  for (const part of ["bin", "lib"]) cpSync(join(ROOT, part), join(repo, part), { recursive: true });
+  cpSync(join(ROOT, "package.json"), join(repo, "package.json"));
+  symlinkSync(join(ROOT, "node_modules"), join(repo, "node_modules"));
+  for (const [folder, name] of skills) {
+    mkdirSync(join(repo, "skills", folder), { recursive: true });
+    writeFileSync(join(repo, "skills", folder, "SKILL.md"), `---\nname: ${JSON.stringify(name)}\ndescription: test\n---\n`);
+  }
+  return repo;
+}
+
+test("a hostile or mismatched frontmatter name installs into the folder name and nowhere else", () => {
+  const repo = fakeRepo([["dotdot", ".."], ["dot", "."], ["slash", "a/b"], ["folder-x", "other-name"]]);
+  const home = mkdtempSync(join(tmpdir(), "skillkit-home-"));
+  mkdirSync(join(home, ".claude", "skills", "keep-me"), { recursive: true });
+  writeFileSync(join(home, ".claude", "precious.json"), "{}");
+  writeFileSync(join(home, ".claude", "skills", "keep-me", "SKILL.md"), "---\nname: keep-me\n---\n");
+  const r = run(join(repo, "bin", "install.mjs"), ["--all", "--yes"], { home });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(readdirSync(join(home, ".claude", "skills")).sort(), ["dot", "dotdot", "folder-x", "keep-me", "slash"]);
+  assert.ok(existsSync(join(home, ".claude", "precious.json")));
+  assert.match(r.stdout, /Installed folder-x\s+~\/\.claude\/skills\/folder-x\n/);
+
+  const u = run(join(repo, "bin", "uninstall.mjs"), ["--all", "--yes"], { home });
+  assert.equal(u.status, 0, u.stderr);
+  assert.deepEqual(readdirSync(join(home, ".claude", "skills")), ["keep-me"]);
+  assert.ok(existsSync(join(home, ".claude", "precious.json")));
+});
+
+test("--setup off a TTY keeps a differing command file with a warn; --yes replaces it after a backup", () => {
+  const home = mkdtempSync(join(tmpdir(), "skillkit-home-"));
+  const cmd = join(home, ".claude", "commands", "spec-new.md");
+  mkdirSync(dirname(cmd), { recursive: true });
+  writeFileSync(cmd, "mine");
+  const kept = run(INSTALL, ["spec-versioning", "--setup"], { home });
+  assert.equal(kept.status, 0, kept.stderr);
+  assert.equal(readFileSync(cmd, "utf8"), "mine");
+  assert.match(kept.stdout, /! kept ~\/\.claude\/commands\/spec-new\.md: differs; pass --yes to replace\n  ! Wired spec-versioning\s+1 warning\n/);
+  assert.match(kept.stdout, /Summary  1 ok · 0 fixed · 1 warn · 0 failed\n/);
+
+  const replaced = run(INSTALL, ["spec-versioning", "--setup", "--yes"], { home });
+  assert.equal(replaced.status, 0, replaced.stderr);
+  assert.notEqual(readFileSync(cmd, "utf8"), "mine");
+  const backups = readdirSync(dirname(cmd)).filter((f) => f.startsWith("spec-new.md.bak."));
+  assert.equal(backups.length, 1);
+  assert.equal(readFileSync(join(dirname(cmd), backups[0]), "utf8"), "mine");
 });

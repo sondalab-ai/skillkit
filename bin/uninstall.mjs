@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 import { homedir } from "node:os";
 import { join, basename } from "node:path";
-import { rmSync } from "node:fs";
 import { GLYPHS, TermError, needsPrompt, paint } from "@sondalab/ui-kit/term.js";
-import { SKILLS_DIR, discoverSkills } from "../lib/skills.mjs";
+import { SKILLS_DIR, discoverSkills, removeSkill } from "../lib/skills.mjs";
 import { loadTeardown } from "../lib/setup.mjs";
 import { runCli, pickSkills, shellLine, tildify } from "../lib/cli.mjs";
 import { chooseMany, confirm } from "../lib/prompt.mjs";
@@ -23,7 +22,7 @@ const idOf = (skill) => basename(skill.dir);
 function refuseAmbiguous(picked, installed) {
   for (const skill of picked) {
     const id = idOf(skill);
-    const claimants = installed.filter((s) => idOf(s) === id || s.name === id);
+    const claimants = installed.filter((s) => idOf(s) === id || s.declaredName === id);
     if (claimants.length > 1) {
       throw new TermError(
         `Could not pick ${id}`,
@@ -84,16 +83,19 @@ async function uninstall(flags, ui, argv) {
       const id = idOf(skill);
       const teardown = fromCatalog(skill) ? await loadTeardown(catalog.get(id).dir) : null;
       if (teardown) {
+        const before = ui.warnings();
         try {
           await teardown({ skillDir: skill.dir, claudeDir: CLAUDE_DIR, log: ui.log });
-          ui.step("done", `Unwired ${id}`, "hooks, commands, permissions");
+          const warned = ui.warnings() - before;
+          counts.warn += warned;
+          ui.step(warned ? "warn" : "done", `Unwired ${id}`, warned ? `${warned} warning${warned > 1 ? "s" : ""}` : "teardown ran");
         } catch (err) {
           ui.report(err, { what: `Could not unwire ${id}`, rerun: [id, "--yes"] });
           counts.failed++;
           continue;
         }
       }
-      rmSync(skill.dir, { recursive: true, force: true });
+      removeSkill(skill.dir, TARGET_DIR);
       ui.step("done", `Removed ${id}`, tildify(skill.dir));
       counts.ok++;
     }
